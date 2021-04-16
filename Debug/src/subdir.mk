@@ -17,7 +17,7 @@ ASM_DEPS += \
 src/IQ_Audio_Demod.doj: ../src/IQ_Audio_Demod.asm
 	@echo 'Building file: $<'
 	@echo 'Invoking: CrossCore Blackfin Assembler'
-	easmblkfn -file-attr ProjectName="IQ_Audio_Demod" -proc ADSP-BF706 -si-revision 1.1 -g -D_DEBUG -DCORE0 @includes-620d9f417339c52dbdd20c0317fe52a4.txt -gnu-style-dependencies -MM -Mo "src/IQ_Audio_Demod.d" -o "$@" "$<"
+	easmblkfn -file-attr ProjectName="IQ_Audio_Demod" -proc ADSP-BF706 -si-revision 1.1 -g -D_DEBUG -DCORE0 @includes-59d032f4c97d40ffd2dd73f1b7dba989.txt -gnu-style-dependencies -MM -Mo "src/IQ_Audio_Demod.d" -o "$@" "$<"
 	@echo 'Finished building: $<'
 	@echo ' '
 

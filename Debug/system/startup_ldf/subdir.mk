@@ -33,28 +33,28 @@ C_DEPS += \
 system/startup_ldf/app_cplbtab.doj: ../system/startup_ldf/app_cplbtab.c
 	@echo 'Building file: $<'
 	@echo 'Invoking: CrossCore Blackfin C/C++ Compiler'
-	ccblkfn -c -file-attr ProjectName="IQ_Audio_Demod" -proc ADSP-BF706 -flags-compiler --no_wrap_diagnostics -si-revision 1.1 -g -D_DEBUG -DCORE0 @includes-d4ffb45b0ec69c61f801ff34a4bd5191.txt -structs-do-not-overlap -no-const-strings -no-multiline -warn-protos -double-size-32 -decls-strong -cplbs -gnu-style-dependencies -MD -Mo "system/startup_ldf/app_cplbtab.d" -o "$@" "$<"
+	ccblkfn -c -file-attr ProjectName="IQ_Audio_Demod" -proc ADSP-BF706 -flags-compiler --no_wrap_diagnostics -si-revision 1.1 -g -D_DEBUG -DCORE0 @includes-39707aa2c48383036f21d3ae9199e500.txt -structs-do-not-overlap -no-const-strings -no-multiline -warn-protos -double-size-32 -decls-strong -cplbs -gnu-style-dependencies -MD -Mo "system/startup_ldf/app_cplbtab.d" -o "$@" "$<"
 	@echo 'Finished building: $<'
 	@echo ' '
 
 system/startup_ldf/app_handler_table.doj: ../system/startup_ldf/app_handler_table.c
 	@echo 'Building file: $<'
 	@echo 'Invoking: CrossCore Blackfin C/C++ Compiler'
-	ccblkfn -c -file-attr ProjectName="IQ_Audio_Demod" -proc ADSP-BF706 -flags-compiler --no_wrap_diagnostics -si-revision 1.1 -g -D_DEBUG -DCORE0 @includes-d4ffb45b0ec69c61f801ff34a4bd5191.txt -structs-do-not-overlap -no-const-strings -no-multiline -warn-protos -double-size-32 -decls-strong -cplbs -gnu-style-dependencies -MD -Mo "system/startup_ldf/app_handler_table.d" -o "$@" "$<"
+	ccblkfn -c -file-attr ProjectName="IQ_Audio_Demod" -proc ADSP-BF706 -flags-compiler --no_wrap_diagnostics -si-revision 1.1 -g -D_DEBUG -DCORE0 @includes-39707aa2c48383036f21d3ae9199e500.txt -structs-do-not-overlap -no-const-strings -no-multiline -warn-protos -double-size-32 -decls-strong -cplbs -gnu-style-dependencies -MD -Mo "system/startup_ldf/app_handler_table.d" -o "$@" "$<"
 	@echo 'Finished building: $<'
 	@echo ' '
 
 system/startup_ldf/app_heaptab.doj: ../system/startup_ldf/app_heaptab.c
 	@echo 'Building file: $<'
 	@echo 'Invoking: CrossCore Blackfin C/C++ Compiler'
-	ccblkfn -c -file-attr ProjectName="IQ_Audio_Demod" -proc ADSP-BF706 -flags-compiler --no_wrap_diagnostics -si-revision 1.1 -g -D_DEBUG -DCORE0 @includes-d4ffb45b0ec69c61f801ff34a4bd5191.txt -structs-do-not-overlap -no-const-strings -no-multiline -warn-protos -double-size-32 -decls-strong -cplbs -gnu-style-dependencies -MD -Mo "system/startup_ldf/app_heaptab.d" -o "$@" "$<"
+	ccblkfn -c -file-attr ProjectName="IQ_Audio_Demod" -proc ADSP-BF706 -flags-compiler --no_wrap_diagnostics -si-revision 1.1 -g -D_DEBUG -DCORE0 @includes-39707aa2c48383036f21d3ae9199e500.txt -structs-do-not-overlap -no-const-strings -no-multiline -warn-protos -double-size-32 -decls-strong -cplbs -gnu-style-dependencies -MD -Mo "system/startup_ldf/app_heaptab.d" -o "$@" "$<"
 	@echo 'Finished building: $<'
 	@echo ' '
 
 system/startup_ldf/app_startup.doj: ../system/startup_ldf/app_startup.s
 	@echo 'Building file: $<'
 	@echo 'Invoking: CrossCore Blackfin Assembler'
-	easmblkfn -file-attr ProjectName="IQ_Audio_Demod" -proc ADSP-BF706 -si-revision 1.1 -g -D_DEBUG -DCORE0 @includes-620d9f417339c52dbdd20c0317fe52a4.txt -gnu-style-dependencies -MM -Mo "system/startup_ldf/app_startup.d" -o "$@" "$<"
+	easmblkfn -file-attr ProjectName="IQ_Audio_Demod" -proc ADSP-BF706 -si-revision 1.1 -g -D_DEBUG -DCORE0 @includes-59d032f4c97d40ffd2dd73f1b7dba989.txt -gnu-style-dependencies -MM -Mo "system/startup_ldf/app_startup.d" -o "$@" "$<"
 	@echo 'Finished building: $<'
 	@echo ' '
 

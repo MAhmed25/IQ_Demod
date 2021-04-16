@@ -92,7 +92,7 @@ all: IQ_Audio_Demod.dxe
 IQ_Audio_Demod.dxe: $(LDF_SRCS) $(SRC_OBJS)
 	@echo 'Building target: $@'
 	@echo 'Invoking: CrossCore Blackfin Linker'
-	ccblkfn -proc ADSP-BF706 -si-revision 1.1 -TE:/DSP-IQ-DEMOD/sinegen/system/startup_ldf/app.ldf -no-mem -LE:/DSP-IQ-DEMOD/sinegen/Debug/system/startup_ldf -flags-link -MDDEBUG,-MDCORE0 -add-debug-libpaths -o IQ_Audio_Demod.dxe @input-file.txt  -flags-link -od,.\.
+	ccblkfn -proc ADSP-BF706 -si-revision 1.1 -TC:/Users/Muad-/source/repos/IQ_Audio_Demodulation/system/startup_ldf/app.ldf -no-mem -LC:/Users/Muad-/source/repos/IQ_Audio_Demodulation/Debug/system/startup_ldf -flags-link -MDDEBUG,-MDCORE0 -add-debug-libpaths -o IQ_Audio_Demod.dxe @input-file.txt  -flags-link -od,.\.
 	@echo 'Finished building target: $@'
 	@echo ' '
 

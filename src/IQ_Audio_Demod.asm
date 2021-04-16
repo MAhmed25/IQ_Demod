@@ -1,7 +1,7 @@
 .section L1_data_a;  // Linker places 12 kHz LUT starting at 0x11800000
 
-.BYTE4 LUT[8] = { 0x0, 0x5a8279, 0x7fffff,0x5a8279, 0x0, 0xa57d87, 0x800000, 0xa57d87 }; //2's complement so goes from 0 -> 1 -> 0 -> -1 then repeat
-//.BYTE4 LUT[16] = {0x0, 0x0, 0x5a8279, 0x5a8279, 0x7fffff, 0x7fffff, 0x5a8279, 0x5a8279, 0x0, 0x0, 0xa57d87, 0xa57d87, 0x800000, 0x800000, 0xa57d87, 0xa57d87}; //2's complement so goes from 0 -> 1 -> 0 -> -1 then repeat
+//.BYTE4 LUT[8] = { 0x0, 0x5a8279, 0x7fffff,0x5a8279, 0x0, 0xa57d87, 0x800000, 0xa57d87 }; //2's complement so goes from 0 -> 1 -> 0 -> -1 then repeat
+.BYTE4 LUT[16] = {0x0, 0x0, 0x5a8279, 0x5a8279, 0x7fffff, 0x7fffff, 0x5a8279, 0x5a8279, 0x0, 0x0, 0xa57d87, 0xa57d87, 0x800000, 0x800000, 0xa57d87, 0xa57d87}; //2's complement so goes from 0 -> 1 -> 0 -> -1 then repeat
 
 .section program; 
 .global _main; 
@@ -10,8 +10,6 @@
 
 // DAC Freq is 96 kHz Max, if we want say a 10 kHz output, then set LUT size to 9.6, which is impossible, next closet is 10 size
 // Giving a freq of 9.6 kHz. Although, usually want LUT sizes to be in powers of 2, so pick 8 giving 12 kHz.
-
-
 
 _main:
 // Setting up Modulo addressing for LUT
@@ -58,7 +56,6 @@ SEC_isr:
 // 1: Determine the source of interrupt
 // Obtain the currently active interrupt
 R0 = [REG_SEC0_CSID0];
-[REG_SEC0_CSID0] = R0; // Assert interrupt
 // Check if the interrupt is from SCTL31 = HALFSPORT B DMA = RX channel.
 R1 = 0x1F(Z);
 // If it is then jump to RX data section
@@ -73,7 +70,7 @@ RX_Data:
 // CSID is NW (non-writeable) but writing to it causes acknowledgement
 // Empty buffer
 R0=[REG_SPORT0_RXPRI_B];
-
+[REG_SEC0_CSID0] = R0; // Assert interrupt
 jump END_Isr;
 
 TX_Data:
@@ -81,7 +78,7 @@ R3 = [I0 ++ M0];
 
 //[REG_SPORT0_TXPRI_A]=R3; //Send to left channel DAC
 [REG_SPORT0_TXPRI_A]=R3;
-
+[REG_SEC0_CSID0] = R0; // Assert interrupt
 
 // For I/Q calculation, multiply recieved data using a MAC calculation.
 // Also consider that the MAC registers are only 40-bits wide at max, whereas MACs with 24 bits may cause
@@ -110,12 +107,13 @@ RTI;
 codec_configure:
 [--SP] = RETS;                            // Push stack (only for nested calls)
 // R1 Controls master clock, enable master clock
-R1=0x03(X); R0=0x4000(X); call TWI_write;
+R1=0x01(X); R0=0x4000(X); call TWI_write;
 // R65-66 Digital clock controllers enable just enable all
 R1=0x7f(X); R0=0x40f9(X); call TWI_write; // Enable all clocks
 R1=0x03(X); R0=0x40fa(X); call TWI_write; // Enable all clocks
 
-// R15 Controls the serial port for transfers! enable master mode
+// R15 Controls the serial port for transfers! enable master mode,
+// frame begins on rising edge, left channel first (Right justified mode)
 R1=0x09(X); R0=0x4015(X); call TWI_write;
 
 // R19 ADC Control, enable both ADC, leave everything else default
@@ -155,7 +153,8 @@ R1=0x0b(X); R0=0x400c(X); call TWI_write;
 R1=0xe7(X); R0=0x4023(X); call TWI_write;
 R1=0xe7(X); R0=0x4024(X); call TWI_write;
 
-// R16 serial port control part 2, 64 Bits-per-audio frame (32 bit L, 32 bit R) no change
+// R16 serial port control part 2, 64 Bits-per-audio frame (32 bit L, 32 bit R).
+// Right justified.
 R1=0x02(X); R0=0x4016(X); call TWI_write;
 // R17 change Sampling rate to 96 kHz from default 48 kHz
 R1=0x06(X); R0=0x4017(X); call TWI_write;
@@ -203,27 +202,12 @@ R0=0x3F0(X);
 R0=0x00400001; [REG_SPORT0_DIV_A]=R0;      // 64 bits per frame, clock divisor of 1
 R0=0x00400001; [REG_SPORT0_DIV_B]=R0;      // 64 bits per frame (stereo), clock divisor of 1
 
-// 1 - SETUP THE CSO, MCTL, CTL Registers but do not enable
-R0=0x00000001; [REG_SPORT0_CS0_B]=R0;
-R0=0x00000000; [REG_SPORT0_MCTL_B]=R0;
-R0=0x000A31F0; [REG_SPORT0_CTL_B]=R0;
-
-R0=0x00000001; [REG_SPORT0_CS0_A]=R0;
-R0=0x00000000; [REG_SPORT0_MCTL_A]=R0;
-R0=0x020A31F0; [REG_SPORT0_CTL_A]=R0;
-// 2 - No modification of sport err/CTL2 registers required
-// 3 - R-MODIFY-WRITE enable MCTL, CTL
-R0=[REG_SPORT0_MCTL_B]; bitset(R0, 0);
-[REG_SPORT0_MCTL_B]=R0;
-
-R0=[REG_SPORT0_CTL_B]; bitset(R0, 0);
-[REG_SPORT0_CTL_B]=R0;
-
-R0=[REG_SPORT0_MCTL_A]; bitset(R0, 0);
-[REG_SPORT0_MCTL_A]=R0;
-
-R0=[REG_SPORT0_CTL_A]; bitset(R0, 0);
-[REG_SPORT0_CTL_A]=R0;
+// 1 - Right justified mode, 24 bit data word, late frame sync,
+// Delay of 8 bits
+R0=0x80000; [REG_SPORT0_MCTL_B]=R0;
+R0=0x80000; [REG_SPORT0_MCTL_A]=R0;
+R0=0x000e3973; [REG_SPORT0_CTL_B]=R0;
+R0=0x020e3973; [REG_SPORT0_CTL_A]=R0;
 
 // The adau codec generally works in stereo L/RCLK mode, if want
 // Only single channel then have to 
