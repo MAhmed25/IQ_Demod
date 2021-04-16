@@ -1,0 +1,7 @@
+"src/sinegen.doj"
+"system/adi_initialize.doj"
+"system/pinmux/GeneratedSources/pinmux_config.doj"
+"system/startup_ldf/app_cplbtab.doj"
+"system/startup_ldf/app_handler_table.doj"
+"system/startup_ldf/app_heaptab.doj"
+"system/startup_ldf/app_startup.doj"

@@ -1,0 +1,520 @@
+Page 1  ../system/startup_ldf/app_startup.s
+ADI easmblkfn (4.1.3.2) 10 Oct 2017 09:45:32
+
+offset       opcode  line
+======       ======  ====
+                        1 /*
+                        2 ** ADSP-BF706 startup code generated on May 14, 2017 at 19:26:02.
+                        3 */
+                        4 /*
+                        5 ** Copyright (C) 2000-2016 Analog Devices Inc., All Rights Reserved.
+                        6 **
+                        7 ** This file is generated automatically based upon the options selected
+                        8 ** in the System Configuration utility. Changes to the Startup Code configuration
+                        9 ** should be made by modifying the appropriate options rather than editing
+                       10 ** this file. To access the System Configuration utility, double-click the
+                       11 ** system.svc file from a navigation view.
+                       12 **
+                       13 ** Custom additions can be inserted within the user-modifiable sections,
+                       14 ** these are bounded by comments that start with "$VDSG". Only changes
+                       15 ** placed within these sections are preserved when this file is re-generated.
+                       16 **
+                       17 ** Product      : CrossCore Embedded Studio
+                       18 ** Tool Version : 6.0.8.0
+                       19 */
+                       20 
+                       21 #include <sys/platform.h>
+                       22 #include <sys/anomaly_macros_rtl.h>
+                       23 #include <adi_osal.h>
+                       24 #include <sys/fatal_error_code.h>
+                       25 #include <sys/exception.h>
+                       26 
+                       27 #define LOADIMM32REG(R,VAL) R = VAL;
+                       28 
+                       29 /* Mask of interrupt bits to be enabled by default. Bits 0-4 unmaskable. */
+                       30 #define INTERRUPT_BITS (BITM_IMASK_IVG11 | BITM_IMASK_IVG15)
+                       31 
+                       32 #define UNASSIGNED_VAL 0x81818181
+                       33 
+                       34 // The requiredForROMBoot file attribute is included here as this source
+                       35 // defines code and data that are used before, or as part of, the meminit
+                       36 // memory initialization support.
+                       37 .FILE_ATTR requiredForROMBoot;
+                       38 
+     0                 39 .SECTION/DOUBLEANY program;
+     0                 40 .ALIGN 2;
+                       41 
+     0                 42 start:
+                       43       // The assembler warning for anomaly 05-00-0312, issued when interrupts
+                       44       // are enabled and an an SSYNC, CSYNC or loop register load is used, is
+                       45       // not needed till interrupts are enabled. So we suppress it.
+                       46       .MESSAGE/SUPPRESS 5515;
+                       47 
+                       48 
+                       49 /*$VDSG<insert-code-very-beginning>                             */
+     0                 50 .start_of_user_code_very_beginning:
+                       51       // Insert additional code to be executed before any other startup code here.
+                       52       // This code is preserved if the CRT is re-generated.
+     0                 53 .end_of_user_code_very_beginning:
+                       54 /*$VDSG<insert-code-very-beginning>                             */
+                       55 
+                       56       // Disable the Branch Predictor and clear its memory so that it is not
+                       57       // making predictions based on out-of-date address/opcode info. This is
+                       58       // as recommended for anomaly 19-00-0047. Clearing the BP's memory takes
+                       59       // approximately 150 CCLKs, and we need to have the BP disabled during
+                       60       // that time.
+                       61 
+     0         2300    62       CSYNC;                           // Flush pipeline.
+                       63 
+                       64       // Configure the Branch Predictor and start operation to flush its
+                       65       // internal operation. This must be done while SYSCFG:BPEN is unmasked.
+                       66 
+                       67       R0 = BITM_BP_CFG_CLRBP |         // Clear any learned predictions
+                       68            (1<<15) |                   // SKUPDLRU (Skip Updates LRU)
+                       69            BITM_BP_CFG_JUMPCCEN |      // JUMPCCEN (JUMP Condition Code Enable)
+                       70                                        // Note: required for anomaly 19000034.
+                       71            BITM_BP_CFG_JUMPEN |        // JUMPEN (JUMP Enable)
+                       72 #if !WA_19000044
+                       73            BITM_BP_CFG_RTSEN |         // RTSEN (RTS Enable)
+                       74 #endif
+                       75            (1<<20) |                   // CALL16EN (Call 16-Bit Enable)
+                       76            BITM_BP_CFG_CALL32EN |      // CALL32EN (Call 32-Bit Enable)
+                       77            BITM_BP_CFG_CALL64EN |      // CALL64EN (Call 64-Bit Enable)
+     2         00da    78            (2<<BITP_BP_CFG_STMOUTVAL); // 2 STMOUTVAL (Store Timeout Value)
+     4         7702    78 
+     6         0180    78 
+     8         0000    78 
+     a         00d8    79       [REG_BP_CFG] = R0;
+     c         c01f    79 
+     e         00a0    79 
+    10         0002    79 
+                       80 
+    12         c231    81       R0 = SYSCFG;
+    14         404c    82       BITCLR(R0, BITP_SYSCFG_BPEN);
+    16         103e    83       SYSCFG = R0;                     // Disable the BP
+                       84 
+                       85       // Clearing now in progress. We will have to wait until later to enable
+                       86       // the predictor.
+                       87 
+                       88       // Disable CPLBs as they might be enable by initialization code
+                       89       // or still be enabled after a software reset.
+                       90       .EXTERN __disable_cplbs;
+                       91       .TYPE __disable_cplbs,STT_FUNC;
+    18         00e3    92       CALL.X __disable_cplbs;
+    1a         0000    92 
+    1c                 92 
+                       93 
+                       94       // Set RCU0_SVECT0 to allow a self-initiated core only reset to bypass
+                       95       // the boot code and vector straight to the beginning of L1 memory.
+    1c         00da    96       R0 = start;
+    1e         0000    96 
+    20         0000    96 
+    22         0000    96 
+    24         00d8    97       [REG_RCU0_SVECT0] = R0;
+    26         0020    97 
+    28         2000    97 
+    2a         0002    97 
+                       98 
+                       99       // Set registers to unassigned value.
+    2c         00da   100       LOADIMM32REG(R0, UNASSIGNED_VAL)
+    2e         8181   100 
+    30         8181   100 
+    32         0000   100 
+                      101 
+                      102       // Initialize the stack.
+                      103       // Note: this points just past the end of the stack memory.
+                      104       // So the first write must be with [--SP].
+                      105       .EXTERN ldf_stack_end;
+                      106       .TYPE ldf_stack_end,STT_OBJECT;
+    34         0eda   107       LOADIMM32REG(SP, ldf_stack_end)
+    36         0000   107 
+    38         0000   107 
+    3a         0000   107 
+    3c         463e   108       USP = SP;
+                      109 
+                      110       // Push UNASSIGNED_VAL as RETS and old FP onto the stack to terminate
+                      111       // the call stack.
+    3e         4001   112       [--SP] = R0;
+    40         4001   113       [--SP] = R0;
+                      114 
+                      115       // Initialize FP to point to the UNASSIGNED_VAL old FP value.
+    42         7e32   116       FP = SP;
+                      117 
+                      118       // And make space for incoming "parameters" for functions
+                      119       // we call from here.
+    44         a66f   120       SP += -12;
+                      121 
+                      122       // Initialize loop counters to zero, to make sure that
+                      123       // hardware loops are disabled (it can be really baffling
+                      124       // if the counters and bottom regs are set, and we happen
+                      125       // to run into them).
+    46         0760   126       R7 = 0;
+    48         073c   127       LC0 = R7;
+    4a         1f3c   128       LC1 = R7;
+                      129 
+                      130       // Clear the DAG Length regs so that it's safe to use I-regs
+                      131       // without them wrapping around as required by the Blackfin C ABI.
+    4c         2736   132       L0 = R7;
+    4e         2f36   133       L1 = R7;
+    50         3736   134       L2 = R7;
+    52         3f36   135       L3 = R7;
+                      136 
+                      137       // Initialize the Event Vector Table (EVT) entries other than
+                      138       // EVT0 (Emulation) and EVT1 (Reset).
+    54         08da   139       LOADIMM32REG(P0, EVT2)
+    56         c01f   139 
+    58         0820   139 
+    5a         0000   139 
+                      140 
+                      141       // Set EVT2 (NMI) handler to our NMI interrupt dispatcher
+                      142       .EXTERN __nmi_int_dispatcher;
+                      143       .TYPE __nmi_int_dispatcher,STT_FUNC;
+    5c         01da   144       LOADIMM32REG(R1, __nmi_int_dispatcher)
+    5e         0000   144 
+    60         0000   144 
+    62         0000   144 
+    64         0192   145       [P0++] = R1;          // write &nmi_int_dispatcher to EVT2.
+                      146 
+                      147       // Set IVG3's (EVX) handler to our exception dispatcher
+                      148       .EXTERN __exc_dispatcher;
+                      149       .TYPE __exc_dispatcher,STT_FUNC;
+    66         01da   150       LOADIMM32REG(R1, __exc_dispatcher)
+    68         0000   150 
+    6a         0000   150 
+    6c         0000   150 
+    6e         0192   151       [P0++] = R1;          // write &exc_dispatcher to EVT3.
+                      152 
+                      153       // Install cec_int_dispatcher into each EVT4-EVT14 slot so that all
+                      154       // core interrupts are handled by the dispatcher support.
+                      155       .EXTERN __cec_int_dispatcher;
+                      156       .TYPE __cec_int_dispatcher,STT_FUNC;
+    70         01da   157       LOADIMM32REG(R1, __cec_int_dispatcher)
+    72         0000   157 
+    74         0000   157 
+    76         0000   157 
+    78         5968   158       P1 = 11;
+    7a         a0e0   159       LSETUP (.ivt, .ivt) LC0 = P1;
+    7c         0010   159 
+    7e                160 .ivt:  [P0++] = R1;
+    7e         0192   160 
+                      161 
+                      162       // Set IVG15's handler to be the start of the mode-change
+                      163       // code. Then, before we return from the Reset back to user
+                      164       // mode, we'll raise IVG15. This will mean we stay in supervisor
+                      165       // mode, and continue from the mode-change point at the
+                      166       // lowest priority.
+    80         09da   167       LOADIMM32REG(P1, supervisor_mode)
+    82         0000   167 
+    84         0000   167 
+    86         0000   167 
+    88         4193   168       [P0] = P1;
+                      169 
+                      170       // Set the handler for IVG11 to the SEC interrupt dispatcher.
+                      171       .EXTERN __sec_int_dispatcher;
+                      172       .TYPE __sec_int_dispatcher,STT_FUNC;
+    8a         01da   173       LOADIMM32REG(R1, __sec_int_dispatcher)
+    8c         0000   173 
+    8e         0000   173 
+    90         0000   173 
+    92         01e6   174       [P0+(EVT11-EVT15)] = R1;  // write &sec_int_dispatcher to EVT11.
+    94         fcff   174 
+                      175 
+                      176       // Configure SYSCFG.
+    96         ca31   177       R1 = SYSCFG;
+                      178 
+                      179       R0 = ( BITM_SYSCFG_CCEN |       // Enable the cycle counter.
+                      180              BITM_SYSCFG_SNEN |       // Enable self-nesting interrupts.
+                      181              BITM_SYSCFG_BPEN |       // Enable branch prediction.
+    98         20e1   182              BITM_SYSCFG_MPWEN );     // Enable MMR posted writes.
+    9a         0603   182 
+    9c         4856   183       R1 = R0 | R1;
+                      184 
+    9e         113e   185       SYSCFG = R1;
+                      186 
+                      187       // Initialize memory. L1 memory initialization allows parity errors
+                      188       // to be enabled.
+                      189       .EXTERN _adi_init_mem_error_detection;
+                      190       .TYPE _adi_init_mem_error_detection,STT_FUNC;
+    a0         00e3   191       CALL.X _adi_init_mem_error_detection;
+    a2         0000   191 
+    a4                191 
+                      192 
+                      193       // __install_default_handlers is called to allow the opportunity
+                      194       // to install event handlers before main(). The default version of this
+                      195       // function provided in the libraries just returns the mask passed in.
+    a4         80e1   196       R0 = INTERRUPT_BITS (Z);
+    a6         0088   196 
+                      197       .EXTERN __install_default_handlers;
+                      198       .TYPE __install_default_handlers,STT_FUNC;
+    a8         00e3   199       CALL.X __install_default_handlers;  // get the enable mask
+    aa         0000   199 
+    ac                199 
+    ac         2030   200       R4 = R0;              // hold the modified mask in preserved register R4
+                      201 
+                      202       // Initialize the jump target tables used by the interrupt dispatcher.
+                      203       .EXTERN __init_dispatch_tables;
+                      204       .TYPE __init_dispatch_tables,STT_FUNC;
+    ae         00e3   205       CALL.X __init_dispatch_tables;
+    b0         0000   205 
+    b2                205 
+                      206 
+                      207 
+                      208 /*$VDSG<insert-code-early-startup>                              */
+    b2                209 .start_of_user_code1:
+                      210       // Insert additional code to be executed before main here.
+                      211       // This code is preserved if the CRT is re-generated.
+    b2                212 .end_of_user_code1:
+                      213 /*$VDSG<insert-code-early-startup>                              */
+                      214 
+                      215       // Switch from reset to handling IVG15. This is Done before CPLB
+                      216       // initialization so that CPLB events can be handled as soon as
+                      217       // they are enabled.
+                      218 
+                      219       // We are about to enable interrupts so stop suppressing the assembler
+                      220       // warning for 05-00-0312.
+                      221       .MESSAGE/RESTORE 5515;
+                      222 
+                      223       // Enable interrupts using the mask returned from the call to
+                      224       // __install_default_handlers.
+    b2         4400   225       STI R4;
+    b4         9f00   226       RAISE 15;             // handled by supervisor_mode
+                      227 
+                      228       // Move the processor into user mode.
+    b6         08da   229       LOADIMM32REG(P0, still_interrupt_in_ipend)
+    b8         0000   229 
+    ba         0000   229 
+    bc         0000   229 
+    be         583e   230       RETI = P0;
+                      231 
+    c0                232 still_interrupt_in_ipend:
+                      233       // Execute RTI instructions until we've `finished` servicing
+                      234       // all interrupts of priority higher than IVG15. Normally one
+                      235       // would expect to only have the reset interrupt in IPEND
+                      236       // being serviced, but occasionally when debugging this may
+                      237       // not be the case - if restart is hit when servicing an
+                      238       // interrupt.
+                      239       //
+                      240       // When we clear all bits from IPEND, we'll enter user mode,
+                      241       // then we'll automatically jump to supervisor_mode to start
+                      242       // servicing IVG15 (which we will 'service' for the whole
+                      243       // program, so that the program is in supervisor mode.
+                      244       //
+                      245       // Need to do this to 'finish' servicing the reset interrupt.
+                      246       .MESSAGE/SUPPRESS 1056 FOR 1 LINES;  // Suppress stall information message
+    c0         1100   247       RTI;
+                      248 
+    c2                249 supervisor_mode:
+    c2         7b01   250       [--SP] = RETI;        // re-enables the interrupt system
+                      251 
+                      252       #include "cplb.h"
+                      253       // Invoke register_dispatched_handler for each exception code supported,
+                      254       // passing the event type parameter in the callback value so we can
+                      255       // avoid all of the conditional checking in the handler itself.
+                      256       // As the vector table is freshly initialized, we don't need to worry
+                      257       // about running out of space so don't check the return codes to avoid
+                      258       // the overhead.
+                      259       //
+                      260       // There is no support provided for data access multiple CPLB hits (0x27)
+                      261       // and Instruction fetch CPLB protection violation (0x2B). If these
+                      262       // exception occurs they will be treated as an unhandled exception.
+                      263       //
+                      264       // The code below calls the underlying RTL support rather than OSAL to
+                      265       // avoid startup overheads.
+                      266       .EXTERN _adi_rtl_register_dispatched_handler;
+                      267       .TYPE _adi_rtl_register_dispatched_handler,STT_FUNC;
+                      268       .EXTERN _cplb_dhandler;
+                      269       .TYPE _cplb_dhandler,STT_FUNC;
+                      270       // 0x23 - Data access CPLB protection violation
+    c4         00da   271       LOADIMM32REG(R0, ADI_EXC_DATA_PROT_VIOLATION)
+    c6         1300   271 
+    c8         2300   271 
+    ca         0000   271 
+    cc         01da   272       LOADIMM32REG(R1, _cplb_dhandler)
+    ce         0000   272 
+    d0         0000   272 
+    d2         0000   272 
+    d4         1260   273       R2 = CPLB_EVT_DCPLB_WRITE;
+    d6         2930   274       R5 = R1;
+    d8         00e3   275       CALL.X _adi_rtl_register_dispatched_handler;
+    da         0000   275 
+    dc                275 
+                      276       // 0x26 - Data access CPLB miss
+    dc         00da   277       LOADIMM32REG(R0, ADI_EXC_DATA_CPLB_MISS)
+    de         1300   277 
+    e0         2600   277 
+    e2         0000   277 
+    e4         0d30   278       R1 = R5;
+    e6         0a60   279       R2 = CPLB_EVT_DCPLB_MISS;
+    e8         00e3   280       CALL.X _adi_rtl_register_dispatched_handler;
+    ea         0000   280 
+    ec                280 
+                      281       // 0x2C - Instruction fetch CPLB miss
+    ec         00da   282       LOADIMM32REG(R0, ADI_EXC_INSTR_CPLB_MISS)
+    ee         1300   282 
+    f0         2c00   282 
+    f2         0000   282 
+    f4         0d30   283       R1 = R5;
+    f6         0260   284       R2 = CPLB_EVT_ICPLB_MISS;
+    f8         00e3   285       CALL.X _adi_rtl_register_dispatched_handler;
+    fa         0000   285 
+    fc                285 
+                      286       // 0x2D - Instruction fetch multiple CPLB hits
+    fc         00da   287       LOADIMM32REG(R0, ADI_EXC_INSTR_CPLB_MULTI_HIT)
+    fe         1300   287 
+   100         2d00   287 
+   102         0000   287 
+   104         0d30   288       R1 = R5;
+   106         1a60   289       R2 = CPLB_EVT_ICPLB_DOUBLE_HIT;
+   108         00e3   290       CALL.X _adi_rtl_register_dispatched_handler;
+   10a         0000   290 
+   10c                290 
+                      291 
+                      292 #if WA_19000042
+                      293       // Register an exception handler for a reserved user exception as part
+                      294       // of the workaround for silicon errata 19000042 "Self-Nested Interrupts
+                      295       // Erroneously Disable Further Interrupts".
+                      296       .EXTERN _adi_rtl_register_dispatched_handler;
+                      297       .TYPE _adi_rtl_register_dispatched_handler,STT_FUNC;
+                      298       .EXTERN _adi_rtl_anom_19000042_user_exception_handler;
+                      299       .TYPE   _adi_rtl_anom_19000042_user_exception_handler,STT_FUNC;
+                      300       LOADIMM32REG(R0, ADI_RTL_EXCEPTION_IID(WA_19000042_USER_EXCEPTION) )
+                      301       LOADIMM32REG(R1, _adi_rtl_anom_19000042_user_exception_handler)
+                      302       R2 = 0;
+                      303       CALL.X _adi_rtl_register_dispatched_handler;
+                      304 #endif // WA_19000042
+                      305 
+                      306       // Initialize the default CPLB registers for L1 memory.
+                      307       // System memory is controlled by individual CPLB entries.
+                      308 
+                      309       // Load the data value into R0.
+   10c         20e1   310       R0 = BITM_L1DM_DCPLB_DFLT_L1UREAD | BITM_L1DM_DCPLB_DFLT_L1UWRITE | BITM_L1DM_DCPLB_DFLT_L1SWRITE | BITM_L1DM_DCPLB_DFLT_L1EOM;
+   10e         000f   310 
+                      311 
+                      312       // Load the instruction value into R1.
+   110         21e1   313       R1 = BITM_L1IM_ICPLB_DFLT_L1UREAD | BITM_L1IM_ICPLB_DFLT_L1EOM;
+   112         0003   313 
+                      314 
+                      315       // Write the values to the default CPLB registers.
+   114         00d8   316       [REG_L1DM_DCPLB_DFLT] = R0;
+   116         c01f   316 
+   118         1000   316 
+   11a         0002   316 
+   11c         00d8   317       [REG_L1IM_ICPLB_DFLT] = R1;
+   11e         c01f   317 
+   120         1010   317 
+   122         0102   317 
+   124         2300   318       CSYNC;
+                      319 
+                      320       // initialize the CPLBs if they're needed. This was not possible
+                      321       // before we set up the stacks.
+   126         c861   322       R0 = 57;              // cplb_ctrl = 57
+                      323       .EXTERN _cplb_init;
+                      324       .TYPE _cplb_init,STT_FUNC;
+   128         00e3   325       CALL.X _cplb_init;
+   12a         0000   325 
+   12c                325 
+                      326 
+                      327       // Define and initialize the CPLB control variable.
+     0                328       .SECTION/DOUBLEANY cplb_data;
+     0                329       .ALIGN 4;
+                      330       .BYTE4 ___cplb_ctrl = 57;
+                      331       .GLOBAL ___cplb_ctrl;
+                      332       .TYPE ___cplb_ctrl,STT_OBJECT;
+                      333 
+                      334       .PREVIOUS;            // revert back to the code section
+   12c                335       .ALIGN 2;
+                      336 
+                      337 
+                      338 /*$VDSG<insert-code-before-device-initialization>               */
+   12c                339 .start_of_user_code2:
+                      340       // Insert additional code to be executed before OSAL initialization here.
+                      341       // This code is preserved if the CRT is re-generated.
+   12c                342 .end_of_user_code2:
+                      343 /*$VDSG<insert-code-before-device-initialization>               */
+                      344 
+                      345       // Call the OSAL init function.
+                      346       .EXTERN _adi_osal_Init;  // ADI_OSAL_STATUS adi_osal_Init(void);
+                      347       .TYPE _adi_osal_Init,STT_FUNC;
+   12c         00e3   348       CALL.X _adi_osal_Init;
+   12e         0000   348 
+   130                348 
+                      349 
+   130         0160   350       R1 = E_ADI_OSAL_SUCCESS;
+   132         0808   351       CC = R0 == R1;
+   134         0010   352       IF !CC JUMP .osal_Init_failed;
+   136                352 
+                      353 
+                      354       // Call constructors for C++ global scope variables.
+                      355       .EXTERN ___ctorloop;
+                      356       .TYPE ___ctorloop,STT_FUNC
+   136         00e3   357       CALL.X ___ctorloop;
+   138         0000   357 
+   13a                357 
+                      358 
+                      359 
+                      360 /*$VDSG<insert-code-before-main-entry>                          */
+   13a                361 .start_of_user_code3:
+                      362       // Insert additional code to be executed before main here.
+                      363       // This code is preserved if the CRT is re-generated.
+   13a                364 .end_of_user_code3:
+                      365 /*$VDSG<insert-code-before-main-entry>                          */
+                      366 
+                      367       // Call the application program.
+                      368       .EXTERN _main;
+                      369       .TYPE _main,STT_FUNC;
+   13a         00e3   370       CALL.X _main;
+   13c         0000   370 
+   13e                370 
+                      371 
+                      372       // Call the standard C exit function, passing main's return value.
+                      373       .EXTERN _exit;
+                      374       .TYPE _exit,STT_FUNC;
+   13e         00e3   375       CALL.X _exit;         // doesn't return
+   140         0000   375 
+   142                375 
+                      376 
+                      377       // The call to _adi_osal_Init returned an error so call adi_fatal_error.
+                      378       .EXTERN _adi_fatal_error;
+                      379       .TYPE _adi_fatal_error,STT_FUNC;
+   142                380 .osal_Init_failed:
+   142         1030   381       R2 = R0;              // pass adi_osal_Init result value
+   144         3860   382       R0 = _AFE_G_LibraryError;
+   146         3160   383       R1 = _AFE_S_adi_osal_Init_failure;
+   148         0020   384       JUMP.X _adi_fatal_error;  // doesn't return
+   14a                384 
+                      385 
+   14a                386 .start.end: // End label required by the linker to find the size of the start
+                      387             // as necessary for absolute placement.
+                      388       .GLOBAL start;
+                      389       .type start,STT_FUNC;
+                      390 
+                      391       // This is a NULL terminated table of functions pointers for C++
+                      392       // constructor calls before main(). The LDF should contiguously map this
+                      393       // ctor.SECTION first, then others and then ctorl. The ctorl.SECTION
+                      394       // contains the NULL terminator.
+                      395       // We need to define some data at the start of the.SECTION here so that
+                      396       // the start label is placed correctly by the linker. The data could be
+                      397       // anything as it is unused. We set it to the address of the ctor end
+                      398       // .SECTION label to force that section end label to always be required.
+                      399       // This avoids unknowingly not having the ctorl defined NULL terminator
+                      400       // linked and the various unexpected results that could cause.
+     0                401 .SECTION/DOUBLEANY ctor;
+     0                402       .ALIGN 4;
+                      403       .GLOBAL ___ctor_table;
+                      404       .type ___ctor_table,STT_OBJECT;
+                      405       .EXTERN ___ctor_end;
+                      406       .type ___ctor_end,STT_OBJECT;
+                      407       .BYTE4 ___ctor_table = ___ctor_end;
+                      408 
+                      409       // The .gdt sections (global dispatch table) are used by the C++ exception
+                      410       // runtime library support to determine which area of code to which a
+                      411       // particular address belongs. These sections must be mapped contiguously
+                      412       // into memory by the LDF starting with this one and followed by .gdtl.
+     0                413 .SECTION/DOUBLEANY .gdt;
+     0                414       .ALIGN 4;
+                      415       .GLOBAL ___eh_gdt;
+                      416       .TYPE ___eh_gdt,STT_OBJECT;
+                      417       .EXTERN ___eh_gdt_end;
+                      418       .type ___eh_gdt_end,STT_OBJECT;
+                      419       .BYTE4 ___eh_gdt = ___eh_gdt_end;
+                      420 
