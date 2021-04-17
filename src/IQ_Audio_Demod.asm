@@ -1,7 +1,12 @@
 .section L1_data_a;  // Linker places 12 kHz LUT starting at 0x11800000
 
-//.BYTE4 LUT[8] = { 0x0, 0x5a8279, 0x7fffff,0x5a8279, 0x0, 0xa57d87, 0x800000, 0xa57d87 }; //2's complement so goes from 0 -> 1 -> 0 -> -1 then repeat
-.BYTE4 LUT[16] = {0x0, 0x0, 0x5a8279, 0x5a8279, 0x7fffff, 0x7fffff, 0x5a8279, 0x5a8279, 0x0, 0x0, 0xa57d87, 0xa57d87, 0x800000, 0x800000, 0xa57d87, 0xa57d87}; //2's complement so goes from 0 -> 1 -> 0 -> -1 then repeat
+ //8 value, 2's complement look up table for generating 12 khz sine waves.
+.BYTE4 LUT[16] = {0x0, 0x0, 0x5a8279, 0x5a8279, 0x7fffff, 0x7fffff, 0x5a8279, 0x5a8279, 0x0, 0x0, 0xa57d87, 0xa57d87, 0x800000, 0x800000, 0xa57d87, 0xa57d87};
+// IQ Storage buffer/array, since blackfin only operates on 32 bit data words, need 4
+// I.H, I.L, Q.H, Q.L where I.H stores the significant 32 bit value of the I value
+// Nad I.L Stores the lower 32 bit values of the calculated I values.
+.BYTE4 IQ[4] = {0x0, 0x0,0x0,0x0}; // Stores IQ Value, 
+#define outOfPhaseOffset = 0x16;
 
 .section program; 
 .global _main; 
@@ -15,8 +20,10 @@ _main:
 // Setting up Modulo addressing for LUT
 B0 = LUT;	// Base address = LUT(0) Address
 I0 = B0; 	// Index address = actual pointer that moves through the LUT	
-L0 = (LENGTH(LUT))*4;	// L0 is length in BYTES!! hence its length(LUT) = 4 (4 values) * 4 because LUT is .byte4
+L0 = (LENGTH(LUT)-1)*4;	// L0 is length in BYTES hence its length(LUT) * 4 because LUT contains .byte4 data
 M0 = 0x4(Z); // Modify address, number of BYTES to increment I0 by!!.
+M1 = 0x16(Z); // Offset to move to out of phase component
+M2 = 0x48(Z);
 
 P0=0x1;
 // Enable global and core interrupts
@@ -71,9 +78,22 @@ RX_Data:
 // Empty buffer
 R0=[REG_SPORT0_RXPRI_B];
 [REG_SEC0_CSID0] = R0; // Assert interrupt
+
+// Down sample to 16 bit instead of 24 to prevent overflow to an extent
+// When calculating I/Q as squaring a number is akin to left shifting by its power
+// And the accumulators are 40 bits max, and the in-phase component is a squared sine wave
+// Calculate the inphase component using accumlator 1, A1.
+// Get the inphase component and prepare for out of phase component:
+R1 = [I0 ++ M1]; // R1 contains the in phase value and moves I0 to out of phase point in LUT
+R2 = [I0 ++ M2]; // R2 Contains the out of phase value and moves I0 back to original
+A1:0 += R0 * R1;
 jump END_Isr;
 
 TX_Data:
+P0 = I0;
+P1 = M1;
+P0 = P0 + P1;
+R2 = [P0];
 R3 = [I0 ++ M0];
 
 //[REG_SPORT0_TXPRI_A]=R3; //Send to left channel DAC
@@ -100,17 +120,17 @@ RTI;
 
 ._main.end:
 
-
-
 // Function codec_configure initialises the ADAU1761 codec. Refer to the control register
 // descriptions, page 51 onwards of the ADAU1761 data sheet.
 codec_configure:
-[--SP] = RETS;                            // Push stack (only for nested calls)
-// R1 Controls master clock, enable master clock
+[--SP] = RETS;
+// R1 Controls master clock, enable master clock and set INFREQ	TO 256xfs
+// Giving a base fs of 12.288 MHZ / 256 = 48 kHz -> this allows 96khz sampling.
+// (12.288 mhz comes from data sheet where there adau1761 is fed by an oscillator).
 R1=0x01(X); R0=0x4000(X); call TWI_write;
 // R65-66 Digital clock controllers enable just enable all
-R1=0x7f(X); R0=0x40f9(X); call TWI_write; // Enable all clocks
-R1=0x03(X); R0=0x40fa(X); call TWI_write; // Enable all clocks
+R1=0x7f(X); R0=0x40f9(X); call TWI_write;
+R1=0x03(X); R0=0x40fa(X); call TWI_write;
 
 // R15 Controls the serial port for transfers! enable master mode,
 // frame begins on rising edge, left channel first (Right justified mode)
@@ -119,7 +139,7 @@ R1=0x09(X); R0=0x4015(X); call TWI_write;
 // R19 ADC Control, enable both ADC, leave everything else default
 R1=0x13(X); R0=0x4019(X); call TWI_write;
 
-// R22 Mixer 3 control register, enable and only left dac outputs into it
+// R22 Mixer 3 control register, enable look to datasheet (adau1761) to see location
 R1=0x21(X); R0=0x401c(X); call TWI_write;
 // R23 Mixer 3 control regsiter, gains for other inputs to mixer, disable all (default)
 // R24 - R25 Same as above but right -> right etc
@@ -206,8 +226,8 @@ R0=0x00400001; [REG_SPORT0_DIV_B]=R0;      // 64 bits per frame (stereo), clock 
 // Delay of 8 bits
 R0=0x80000; [REG_SPORT0_MCTL_B]=R0;
 R0=0x80000; [REG_SPORT0_MCTL_A]=R0;
-R0=0x000e3973; [REG_SPORT0_CTL_B]=R0;
 R0=0x020e3973; [REG_SPORT0_CTL_A]=R0;
+R0=0x000e3973; [REG_SPORT0_CTL_B]=R0;
 
 // The adau codec generally works in stereo L/RCLK mode, if want
 // Only single channel then have to 
@@ -271,107 +291,3 @@ NOP; NOP; NOP;
 loop_end;
 RTS;
 delay.end:
-
-
-
-/* 
-get_audio:
-wait_left:
-// Wait for left data to synchronize since according to data sheet its the 
-// First channel to stream.
-R0=[REG_SPORT0_CTL_B]; //Put into R0 the control register for the sport
-CC=BITTST(R0, 31);	//Check the bits which dictate if the buffer is full
-if !CC jump wait_left;	//If the buffer isnt sufficiently full keep checking
-R0=[REG_SPORT0_RXPRI_B]; //After partially full (more than 1 word (16 bits) read from reciever
-
-R1 = [I0 ++ M0];
-
-[REG_SPORT0_TXPRI_A]=R1; //Send to left channel DAC
-
-
-wait_right:
-R0=[REG_SPORT0_CTL_B]; 
-CC=BITTST(R0, 31); 
-if !CC jump wait_right;
-R0=[REG_SPORT0_RXPRI_B];
-
-[REG_SPORT0_TXPRI_A]=R1; //Send to right channel DAC
-
-jump get_audio; //Loop
-*/
-
-
-/*
-codec_configure:
-[--SP] = RETS;                            // Push stack (only for nested calls)
-// R1 Controls master clock, enable master clock
-R1=0x03(X); R0=0x4000(X); call TWI_write;
-// R65-66 Digital clock controllers enable just enable all
-R1=0x7f(X); R0=0x40f9(X); call TWI_write; // Enable all clocks
-R1=0x03(X); R0=0x40fa(X); call TWI_write; // Enable all clocks
-
-// R15 Controls the serial port for transfers! enable master mode
-R1=0x03(X); R0=0x4015(X); call TWI_write;
-
-// R19 ADC Control, enable both ADC, leave everything else default
-R1=0x13(X); R0=0x4019(X); call TWI_write;
-
-// R22 Mixer 3 control register, enable and only left dac outputs into it
-R1=0x21(X); R0=0x401c(X); call TWI_write;
-// R23 Mixer 3 control regsiter, gains for other inputs to mixer, disable all (default)
-// R24 - R25 Same as above but right -> right etc
-R1=0x41(X); R0=0x401e(X); call TWI_write;
-
-// R35 actually enable the playback section of the circuit
-R1=0x03(X); R0=0x4029(X); call TWI_write;
-// R36-38 DAC Controllers turn both DACs on, no change in volume
-R1=0x03(X); R0=0x402a(X); call TWI_write;
-
-// R58-59 Serial input/output control( where to send L/R Data)
-R1=0x01(X); R0=0x40f2(X); call TWI_write;
-R1=0x01(X); R0=0x40f3(X); call TWI_write;
-// R2 Controls MIC/Jack detection, not used and default disabled
-// R3 Controls record? power management, not used hence ignored
-// R4 (0x400a) Controls the left Mixer 1, looking at datasheet, enable LINN-GAIN, disable (mute) rest
-R1=0x0b(X); R0=0x400a(X); call TWI_write;
-
-// R5 (0x400b) Controls left mixer record (PGA and LAUX input gains not needed, default disabled
-// R6 Controls the  mixer 2 right gains for RINNG,RINPG (enable RINNG only)
-R1=0x0b(X); R0=0x400c(X); call TWI_write;
-// R7 Controls the record mixer2 right gains for PGA, RAUX (disable both (default))
-// R8 Controls the PGA For the left path (default disabled no change)
-// R9 Controls the PGA for the right path (default disabled, no change)
-// R10 Controls biasing for microphones? not needed, default disabled
-// R11 - R14 Control ALC, default disabled, not needed
-
-// R26 - R27 Double mixers which lets you mix the outputs of above, DISABLE! (default)
-// R28 Mixer 7 (mono) controller, disable and ignore.
-// R29 - R30 LHP and RHP are connected to Jack 2. enable both and increase gain to 0db from default
-R1=0xe7(X); R0=0x4023(X); call TWI_write;
-R1=0xe7(X); R0=0x4024(X); call TWI_write;
-
-// R16 serial port control part 2, 64 Bits-per-audio frame (32 bit L, 32 bit R) no change
-R1=0x00(X); R0=0x4016(X); call TWI_write;
-// R17 change Sampling rate to 96 kHz from default 48 kHz
-R1=0x06(X); R0=0x4017(X); call TWI_write;
-// R18 Ignore TDM mode only
-
-// R60 Default, enables all clocks instead of as GPIO
-// R61-62 DSP core control (ignore) (disable)
-// R63 Slew mode, ignore
-// R64 Serial port sampling rate - 96 Khz
-R1=0x06(X); R0=0x40f8(X); call TWI_write;
-// R57 DSP Samp rate - set to 96 khz
-R1=0x00(X); R0=0x40eb(X); call TWI_write;
-
-// R20 - R21 Volumt control, leave default (no attenuation)
-// R31 - R32 ROUTN/P AND LOUTN/P controls, ignore (mute) (default) (datasheet)
-// R33 - R34 mono control, click suppression ignore (default)
-// R39-41 serial port pull up / pull down control and drive
-// R42 JACK input - ignore
-// R67 Dejitter control, ignore
-// R43-47 Ignore
-// R48-51 Ignore
-// R52-R56 Ignore
-
-*/
