@@ -1,12 +1,16 @@
 .section L1_data_a;  // Linker places 12 kHz LUT starting at 0x11800000
 
  //8 value, 2's complement look up table for generating 12 khz sine waves.
-.BYTE4 LUT[16] = {0x0, 0x0, 0x5a8279, 0x5a8279, 0x7fffff, 0x7fffff, 0x5a8279, 0x5a8279, 0x0, 0x0, 0xa57d87, 0xa57d87, 0x800000, 0x800000, 0xa57d87, 0xa57d87};
+.BYTE4 LUT[16] = {0x0, 0x0, 0x005a8279, 0x005a8279, 0x007fffff, 0x7fffff, 0x005a8279, 0x005a8279, 0x0, 0x0, 0xffa57d87, 0xffa57d87, 0xff800000, 0xff800000, 0xffa57d87, 0xffa57d87};
+.BYTE4 IQLUT[8] = {0x0, 0x005a8279, 0x7fffff, 0x005a8279, 0x0, 0xffa57d87, 0xff800000, 0xffa57d87};
 // IQ Storage buffer/array, since blackfin only operates on 32 bit data words, need 4
 // I.H, I.L, Q.H, Q.L where I.H stores the significant 32 bit value of the I value
 // Nad I.L Stores the lower 32 bit values of the calculated I values.
-.BYTE4 IQ[4] = {0x0, 0x0,0x0,0x0}; // Stores IQ Value, 
-#define outOfPhaseOffset = 0x16;
+.BYTE4 IQ[4] = {0x0, 0x0, 0x0, 0x0}; // Stores IQ Value, 
+.BYTE4 IQFinal[4] = {0x0, 0x0, 0x0, 0x0}; // Stores IQ Value.
+
+.BYTE4 LSync = 0x0;
+.BYTE4 prevValue = 0x0;
 
 .section program; 
 .global _main; 
@@ -20,10 +24,10 @@ _main:
 // Setting up Modulo addressing for LUT
 B0 = LUT;	// Base address = LUT(0) Address
 I0 = B0; 	// Index address = actual pointer that moves through the LUT	
-L0 = (LENGTH(LUT)-1)*4;	// L0 is length in BYTES hence its length(LUT) * 4 because LUT contains .byte4 data
-M0 = 0x4(Z); // Modify address, number of BYTES to increment I0 by!!.
-M1 = 0x16(Z); // Offset to move to out of phase component
-M2 = 0x48(Z);
+L0 = (LENGTH(LUT))*4;	// L0 is length in BYTES hence its length(LUT) * 4 because LUT contains .byte4 data
+M0 = 0x4(Z); // Modify address, number of BYTES to increment I0 to step through LUT
+M1 = 0x10(Z); // Offset to move to out of phase component, = 16
+M2 = -16;
 
 P0=0x1;
 // Enable global and core interrupts
@@ -39,16 +43,22 @@ P0=0x083F;
 P0=(SEC_isr);
 [EVT11]=P0; 
 
-P0=0x5; //Enables both the interrupt and the source signal for SPORT Interrupts TX, RX
-[REG_SEC0_SCTL31]=P0;
-[REG_SEC0_SCTL29]=P0;
-
 call codec_configure;
 call sport_configure;
 
-wait:
-nop;
+R0=0x5;
+// Enable both interrupts, with transfer buffer first.
+[REG_SEC0_SCTL31]=R0;
+[REG_SEC0_SCTL29]=R0;
 
+wait:
+P0 = IQFinal;
+
+R0 = [P0++];
+R1 = [P0++];
+R2 = [P0++];
+R3 = [P0];
+nop;
 jump wait;
 
 // The ADSPBF706 Only has 1 memory-mapped (MM) evt register (EVT11)
@@ -69,46 +79,81 @@ R1 = 0x1F(Z);
 CC = R0 == R1;
 if CC jump RX_Data;
 jump TX_Data;
-/*
-R0 = R0 <<< 8;
-R0 = R4 >>> 8;
-*/
+
 RX_Data:
-// CSID is NW (non-writeable) but writing to it causes acknowledgement
 // Empty buffer
 R0=[REG_SPORT0_RXPRI_B];
+
+// CSID is NW (non-writeable) but writing to it causes acknowledgement
 [REG_SEC0_CSID0] = R0; // Assert interrupt
 
-// Down sample to 16 bit instead of 24 to prevent overflow to an extent
 // When calculating I/Q as squaring a number is akin to left shifting by its power
-// And the accumulators are 40 bits max, and the in-phase component is a squared sine wave
-// Calculate the inphase component using accumlator 1, A1.
+// And the accumulators can combine to a 72 bit mega register
+// Calculate the inphase component using a MAC on A1:0;
 // Get the inphase component and prepare for out of phase component:
 R1 = [I0 ++ M1]; // R1 contains the in phase value and moves I0 to out of phase point in LUT
 R2 = [I0 ++ M2]; // R2 Contains the out of phase value and moves I0 back to original
-A1:0 += R0 * R1;
-jump END_Isr;
+R3 = [LSync];
+BITTGL(R3, 0);
+[LSync] = R3;
+CC = BITTST(R3, 0); if CC jump MACIQ;
+jump ResetMac;
+
+MACIQ:
+// Calculate INPHASE component
+R6 = [prevValue];
+P2 = IQ;
+R5 = [P2++];
+R4 = [P2];
+A1 = R5, A0 = R4;
+R5:4 = (A1:0 += R6 * R1) (IS);
+[P2--] = R4;
+[P2] = R5;
+// Calculate the quadrature component
+P2 = IQ + 0x08;
+R5 = [P2++];
+R4 = [P2];
+A1 = R5, A0 = R4;
+R5:4 = (A1:0 += R6 * R2) (IS);
+[P2--] = R4;
+[P2] = R5;
+[prevValue] = R0;
+
+ResetMac:
+P0 = B0;
+P1 = I0;
+CC = P0 == P1; if !CC jump End_ISR; // Check whether to reset or not.
+
+P0 = IQ;
+P1 = IQFinal;
+R0 = [P0++];
+[P1++] = R0;
+R0 = [P0++];
+[P1++] = R0;
+R0 = [P0++];
+[P1++] = R0;
+R0 = [P0];
+[P1] = R0;
+
+R0 = 0x0 (z);
+A1 = A0 = 0;
+[P0--] = R0;
+[P0--] = R0;
+[P0--] = R0;
+[P0] = R0;
+
+jump End_ISR;
 
 TX_Data:
-P0 = I0;
-P1 = M1;
-P0 = P0 + P1;
-R2 = [P0];
-R3 = [I0 ++ M0];
-
-//[REG_SPORT0_TXPRI_A]=R3; //Send to left channel DAC
-[REG_SPORT0_TXPRI_A]=R3;
 [REG_SEC0_CSID0] = R0; // Assert interrupt
 
-// For I/Q calculation, multiply recieved data using a MAC calculation.
-// Also consider that the MAC registers are only 40-bits wide at max, whereas MACs with 24 bits may cause
-// overflows to over 40 bits.
-// Worst case, the value would be sin^2 (max).
-// Need to round down to 16 bits by right shifting and keeping sign from 24 bit value. (2^16*2^16 = 2^32)
-// Then perform MAC.
-jump END_Isr;
+// Refills the TX Buffer with next value in LUT.
+R3 = [I0 ++ M0];
+[REG_SPORT0_TXPRI_A] = R3;
 
-END_Isr:
+jump End_ISR;
+
+End_ISR:
 // Interrupt end by writing CSID to SEC END register.
 R2 = [REG_SEC0_CSID0];
 [REG_SEC0_END] = R2;
@@ -226,26 +271,29 @@ R0=0x00400001; [REG_SPORT0_DIV_B]=R0;      // 64 bits per frame (stereo), clock 
 // Delay of 8 bits
 R0=0x80000; [REG_SPORT0_MCTL_B]=R0;
 R0=0x80000; [REG_SPORT0_MCTL_A]=R0;
-R0=0x020e3973; [REG_SPORT0_CTL_A]=R0;
-R0=0x000e3973; [REG_SPORT0_CTL_B]=R0;
-
-// The adau codec generally works in stereo L/RCLK mode, if want
-// Only single channel then have to 
-//R0=0x02001973; [REG_SPORT0_CTL_A]=R0;
-// Sport B(receiver) will be in dsp mode as we are only interested in sampling
-// One of the channels, active low for left channel data 
-
-RTS;
-sport_configure.end:
+// Do not enable the CTLs just yet for synchronization purposes.
+R0=0x001e3973; [REG_SPORT0_CTL_B]=R0;
+R0=0x021e3973; [REG_SPORT0_CTL_A]=R0;
+// Preload TX Buffer
+R0 = 0x0; [REG_SPORT0_TXPRI_A]=R0;
+[REG_SPORT0_TXPRI_A]=R0; [REG_SPORT0_TXPRI_A]=R0;
 
 /*
-// Set up in Standard dsp mode as we are only interested in 1 of the channels
-R0=0x02023173; [REG_SPORT0_CTL_A]=R0;
-// Sport B(receiver) will be in dsp mode as we are only interested in sampling
-// One of the channels, active low for left channel data 
-R0=0x00123173; [REG_SPORT0_CTL_B]=R0;
+// The next 2 variables are for synchronizing such that the reciever turns on after
+// 1 frame sync so that the received data is in synchronization with the transfered data
+// Preload TX buffer with first value of LUT.
+R3 = [I0 ++ M0];
+[REG_SPORT0_TXPRI_A]=R3;
+// Enable transfer buffer
+R0=0x021e3973; [REG_SPORT0_CTL_A]=R0;
+// Now wait until the first word has been transferred then enable receiver
+InOutSynchronizer:
+R0=[REG_SPORT0_CTL_A]; CC=BITTST(R0, 31); if CC jump InOutSynchronizer;
+// Once sent, enable receiver
+R0=0x001e3973; [REG_SPORT0_CTL_B]=R0;
 */
-
+RTS;
+sport_configure.end:
 
 TWI_write:
 //step1) Reverse low order and high order bytes, since data sent in reverse order in bytes (4 bit pairs)
