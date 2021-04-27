@@ -1,15 +1,16 @@
 .section L1_data_a;  // Linker places 12 kHz LUT starting at 0x11800000
 
  //8 value, 2's complement look up table for generating 12 khz sine waves.
-.BYTE4 LUT[16] = {0x0, 0x0, 0x005a8279, 0x005a8279, 0x007fffff, 0x7fffff, 0x005a8279, 0x005a8279, 0x0, 0x0, 0xffa57d87, 0xffa57d87, 0xff800000, 0xff800000, 0xffa57d87, 0xffa57d87};
-.BYTE4 IQLUT[8] = {0xffa57d87, 0x0, 0x005a8279, 0x7fffff, 0x005a8279, 0x0, 0xffa57d87, 0xff800000};
+.BYTE4 LUT[8] = {0x0, 0x5A8279, 0x7fffff, 0x5A8279, 0x0, 0xA57D86, 0x800000, 0xA57D86};
+
 // IQ Storage buffer/array, since blackfin only operates on 32 bit data words, need 4
 // I.H, I.L, Q.H, Q.L where I.H stores the significant 32 bit value of the I value
 // Nad I.L Stores the lower 32 bit values of the calculated I values.
-.BYTE4 IQ[4] = {0x0, 0x0, 0x0, 0x0}; // Stores IQ Value, 
-.BYTE4 IQFinal[4] = {0x0, 0x0, 0x0, 0x0}; // Stores IQ Value.
+.BYTE4 IQ[4] = {0x0, 0x0, 0x0, 0x0}; // Stores IQ Value.
+.BYTE4 IQFinal[4] = {0x0, 0x0, 0x0, 0x0}; // Stores IQ Values ready to be transmitted via UART split into 8 bit words
 
-.BYTE4 LSync = 0x0;
+.BYTE4 LRxSync = 0x0;
+.BYTE4 LTxSync = 0x0;
 
 .section program; 
 .global _main; 
@@ -25,13 +26,13 @@ B0 = LUT;	// Base address = LUT(0) Address
 I0 = B0; 	// Index address = actual pointer that moves through the LUT	
 L0 = (LENGTH(LUT))*4;	// L0 is length in BYTES hence its length(LUT) * 4 because LUT contains .byte4 data
 
-B1 = IQLUT;
+B1 = IQFinal;
 I1 = B1;
-L1 = (LENGTH(IQLUT))*4;
+L1 = (LENGTH(IQFinal))*4;
 
-M0 = 0x4(Z); // Modify address, number of BYTES to increment I0 to step through LUT
-M1 =  8;
-M2 = 28;
+M0 = 0x4(Z); // Modify address, number of BYTES to increment I0 by!.
+M1 = 0x8(Z); // Offset to move to out of phase component, = 16
+M2 = -4;
 
 P0=0x1;
 // Enable global and core interrupts
@@ -49,11 +50,13 @@ P0=(SEC_isr);
 
 call codec_configure;
 call sport_configure;
+//call UART_configure;
 
 R0=0x5;
 // Enable both interrupts, with transfer buffer first.
 [REG_SEC0_SCTL31]=R0;
 [REG_SEC0_SCTL29]=R0;
+//[REG_SEC0_SCTL49]=R0;
 
 wait:
 nop;
@@ -63,6 +66,9 @@ jump wait;
 // To service ALL SEC based interrupts
 // So have to Check what caused the interrupt then do different things.
 // If multiple pending interrupts, have to make sure only the correct "interrupt" is serviced
+
+._main.end:
+
 SEC_isr:
 // For nesting purposes, future proofing may not be neccessary
 [--SP] = RETI;
@@ -74,9 +80,14 @@ R0 = [REG_SEC0_CSID0];
 // Check if the interrupt is from SCTL31 = HALFSPORT B DMA = RX channel.
 R1 = 0x1F(Z);
 // If it is then jump to RX data section
-CC = R0 == R1;
-if CC jump RX_Data;
-jump TX_Data;
+CC = R0 == R1; if CC jump RX_Data;
+
+// Check if the interrupt is from SCTL29 = HALFSPORT A DMA = TX channel
+R1 = 0x1D(Z);
+// If it is then jump to RX data section
+CC = R0 == R1; if CC jump TX_Data;
+// Otherwise its from uart
+jump UART_Tx_Data;
 
 RX_Data:
 // Empty buffer
@@ -89,47 +100,51 @@ R0=[REG_SPORT0_RXPRI_B];
 // And the accumulators can combine to a 72 bit mega register
 // Calculate the inphase component using a MAC on A1:0;
 // Get the inphase component and prepare for out of phase component:
-R3 = [LSync];
+R3 = [LRxSync];
 BITTGL(R3, 0);
-[LSync] = R3;
+[LRxSync] = R3;
 CC = BITTST(R3, 0); if CC jump MACIQ;
 jump End_ISR;
 
 MACIQ:
-R1 = [I1 ++ M1]; // R1 contains the in phase value and moves I0 to out of phase point in LUT
-R2 = [I1 ++ M2]; // R2 Contains the out of phase value and moves I0 back to original + 1
+I0 -= 0x04;
+R1 = [I0 ++ M1]; // R1 contains the in phase value and moves I0 to out of phase point in LUT
+R2 = [I0 ++ M2]; // R2 Contains the out of phase value and moves I0 back to original
 // Calculate INPHASE component
 P2 = IQ;
 R5 = [P2++];
 R4 = [P2];
-A1 = R5 (X), A0 = R4 (X);
-R5:4 = (A1:0 += R0 * R1) (IS);
+A1 = R5 (X), A0 = R4 (Z);
+R5:4 = (A1:0 += R6 * R1) (IS);
 [P2--] = R4;
 [P2] = R5;
 // Calculate the quadrature component
 P2 = IQ + 0x08;
 R5 = [P2++];
 R4 = [P2];
-A1 = R5 (X), A0 = R4 (X);
-R5:4 = (A1:0 += R0 * R2) (IS);
+A1 = R5 (X), A0 = R4 (Z);
+R5:4 = (A1:0 += R6 * R2) (IS);
 [P2--] = R4;
 [P2] = R5;
 
 ResetMac:
-P0 = B1;
-P0 += 0x04;
-P1 = I1;
+P0 = B0;
+P1 = I0;
 CC = P0 == P1; if !CC jump End_ISR; // Check whether to reset or not.
 
 P0 = IQ;
 P1 = IQFinal;
+
+// First 2 values in IQ Final contain lower 16 bits of I.H
+R0 = [P0++]; // R0 = I.H
+R1=R0>>>8; // lower 8 bits of R1 are the higher 8 bits of the low half of R0. (bits 8-15)
+[P1++] = R1;
+[P1++] = R0; // Lower 8 bits of R0 are next to be transferred.
+
+// Next 2 values in IQ Final contain lower 16 bits of Q.H
 R0 = [P0++];
-[P1++] = R0;
-R0 = [P0++];
-[P1++] = R0;
-R0 = [P0++];
-[P1++] = R0;
-R0 = [P0];
+R1=R0>>>8;
+[P1++] = R1;
 [P1] = R0;
 
 R0 = 0x0 (z);
@@ -139,15 +154,40 @@ A1 = A0 = 0;
 [P0--] = R0;
 [P0] = R0;
 
+//R0=0x2(Z); [REG_UART0_IMSK_SET]=R0;
+
 jump End_ISR;
 
 TX_Data:
 [REG_SEC0_CSID0] = R0; // Assert interrupt
 
 // Refills the TX Buffer with next value in LUT.
+R3 = [LTxSync];
+BITTGL(R3, 0);
+[LTxSync] = R3;
+CC = BITTST(R3, 0); if CC jump write_left_Tx;
+
+R3=0x0;
+[REG_SPORT0_TXPRI_A] = R3;
+jump End_ISR;
+
+write_left_Tx:
 R3 = [I0 ++ M0];
 [REG_SPORT0_TXPRI_A] = R3;
+jump End_ISR;
 
+
+UART_Tx_Data:
+// Assert interrupt
+[REG_SEC0_CSID0] = R0;
+// Pass next value to uart tx buffer
+R1 = [I1 ++ M0];
+[REG_UART0_THR]=R1;
+// Check if all 4 values have been sent
+P0 = B1;
+P1 = I1;
+CC = P0 == P1; if !CC jump End_ISR;
+R0=0x2(Z); [REG_UART0_IMSK_CLR]=R0;
 jump End_ISR;
 
 End_ISR:
@@ -159,8 +199,7 @@ R1 = [SP++];
 R0 = [SP++];
 RETI = [SP++];
 RTI;
-
-._main.end:
+SEC_isr.end:
 
 // Function codec_configure initialises the ADAU1761 codec. Refer to the control register
 // descriptions, page 51 onwards of the ADAU1761 data sheet.
@@ -176,7 +215,7 @@ R1=0x03(X); R0=0x40fa(X); call TWI_write;
 
 // R15 Controls the serial port for transfers! enable master mode,
 // frame begins on rising edge, left channel first (Right justified mode)
-R1=0x03(X); R0=0x4015(X); call TWI_write;
+R1=0x09(X); R0=0x4015(X); call TWI_write;
 
 // R19 ADC Control, enable both ADC, leave everything else default
 R1=0x13(X); R0=0x4019(X); call TWI_write;
@@ -217,7 +256,7 @@ R1=0xe7(X); R0=0x4024(X); call TWI_write;
 
 // R16 serial port control part 2, 64 Bits-per-audio frame (32 bit L, 32 bit R).
 // Right justified.
-R1=0x60(X); R0=0x4016(X); call TWI_write;
+R1=0x02(X); R0=0x4016(X); call TWI_write;
 // R17 change Sampling rate to 96 kHz from default 48 kHz
 R1=0x06(X); R0=0x4017(X); call TWI_write;
 // R18 Ignore TDM mode only
@@ -241,15 +280,13 @@ R1=0x00(X); R0=0x40eb(X); call TWI_write;
 // R52-R56 Ignore
 
 NOP;
-RETS = [SP++];                            // Pop stack (only for nested calls)
+RETS = [SP++];
 RTS;
 codec_configure.end:
 
 sport_configure:
 
-R0=0x3F0(X);
-[REG_PORTC_FER]=R0;          // Set up Port C in peripheral mode
-[REG_PORTC_FER_SET]=R0;      // Set up Port C in peripheral mode
+R0=0x3FC(X); [REG_PORTC_FER_SET]=R0;      // Set up Port C in peripheral mode
 
 // Look at the data sheets for why im doing the following steps in the particular order
 // To setup interrupts properly
@@ -269,20 +306,6 @@ R0=0x80000; [REG_SPORT0_MCTL_A]=R0;
 R0=0x001e3973; [REG_SPORT0_CTL_B]=R0;
 R0=0x021e3973; [REG_SPORT0_CTL_A]=R0;
 
-/*
-// The next 2 variables are for synchronizing such that the reciever turns on after
-// 1 frame sync so that the received data is in synchronization with the transfered data
-// Preload TX buffer with first value of LUT.
-R3 = [I0 ++ M0];
-[REG_SPORT0_TXPRI_A]=R3;
-// Enable transfer buffer
-R0=0x021e3973; [REG_SPORT0_CTL_A]=R0;
-// Now wait until the first word has been transferred then enable receiver
-InOutSynchronizer:
-R0=[REG_SPORT0_CTL_A]; CC=BITTST(R0, 31); if CC jump InOutSynchronizer;
-// Once sent, enable receiver
-R0=0x001e3973; [REG_SPORT0_CTL_B]=R0;
-*/
 RTS;
 sport_configure.end:
 
@@ -330,8 +353,8 @@ R0=0x300(Z); [REG_PORTB_FER_SET]=R0;
 // See the BF706 Processor datasheet to see which multiplexer values enable which function/peripheral
 // UART_TX/RX are function 0
 R0=0x0(Z); [REG_PORTB_MUX]=R0;
-// Set divisor to 10 so that bitrate is 100x10^6 (cclk0) / 16 / 8 = 781250.
-R0=0x8(Z); [REG_UART0_CLK]=R0;
+// Set divisor to 10 so that bitrate is 100x10^6 (cclk0) / 16 / 10 = 625000.
+R0=0xA(Z); [REG_UART0_CLK]=R0;
 // Disable RTS/CTS, enable UART, odd parity, 1 stop bit.
 R0=0x00000301(Z); [REG_UART0_CTL]=R0;
 // Enable TX Interrupt when buffer empty
