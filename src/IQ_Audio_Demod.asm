@@ -1,16 +1,13 @@
-.section L1_data_a;  // Linker places 12 kHz LUT starting at 0x11800000
-
+.section L1_data_a;
  //8 value, 2's complement look up table for generating 12 khz sine waves.
-.BYTE4 LUT[8] = {0x0, 0x5A8279, 0x7fffff, 0x5A8279, 0x0, 0xA57D86, 0x800000, 0xA57D86};
+.BYTE4 LUT[16] = {0x0,0x0, 0x005a8279,0x005a8279, 0x7fffff,0x7fffff, 0x005a8279,0x005a8279, 0x0,0x0, 0xffa57d87,0xffa57d87, 0xff800000,0xff800000, 0xffa57d87,0xffa57d87};
 
-// IQ Storage buffer/array, since blackfin only operates on 32 bit data words, need 4
-// I.H, I.L, Q.H, Q.L where I.H stores the significant 32 bit value of the I value
-// Nad I.L Stores the lower 32 bit values of the calculated I values.
+.section L1_data_b;
+
 .BYTE4 IQ[4] = {0x0, 0x0, 0x0, 0x0}; // Stores IQ Value.
 .BYTE4 IQFinal[4] = {0x0, 0x0, 0x0, 0x0}; // Stores IQ Values ready to be transmitted via UART split into 8 bit words
 
 .BYTE4 LRxSync = 0x0;
-.BYTE4 LTxSync = 0x0;
 
 .section program; 
 .global _main; 
@@ -23,16 +20,22 @@
 _main:
 // Setting up Modulo addressing for LUT
 B0 = LUT;	// Base address = LUT(0) Address
-I0 = B0; 	// Index address = actual pointer that moves through the LUT	
+I0 = B0; 	// Index address = actual pointer that moves through the LUT
 L0 = (LENGTH(LUT))*4;	// L0 is length in BYTES hence its length(LUT) * 4 because LUT contains .byte4 data
+I0 -= 0x04;
+I0 -= 0x04;
 
 B1 = IQFinal;
 I1 = B1;
 L1 = (LENGTH(IQFinal))*4;
 
 M0 = 0x4(Z); // Modify address, number of BYTES to increment I0 by!.
-M1 = 0x8(Z); // Offset to move to out of phase component, = 16
-M2 = -4;
+M1 = 0x10(Z); // Offset to move to out of phase component, = 16
+M2 = -8;
+
+call codec_configure;
+call sport_configure;
+call UART_configure;
 
 P0=0x1;
 // Enable global and core interrupts
@@ -48,19 +51,22 @@ P0=0x083F;
 P0=(SEC_isr);
 [EVT11]=P0; 
 
-call codec_configure;
-call sport_configure;
-//call UART_configure;
+
 
 R0=0x5;
-// Enable both interrupts, with transfer buffer first.
 [REG_SEC0_SCTL31]=R0;
+[REG_SEC0_SCTL49]=R0;
+
+/*
+R0=0x5;
+// Enable both interrupts, with tx given a slightly higher priority.
 [REG_SEC0_SCTL29]=R0;
-//[REG_SEC0_SCTL49]=R0;
+*/
 
 wait:
-nop;
+NOP;
 jump wait;
+
 
 // The ADSPBF706 Only has 1 memory-mapped (MM) evt register (EVT11)
 // To service ALL SEC based interrupts
@@ -74,6 +80,8 @@ SEC_isr:
 [--SP] = RETI;
 [--SP] = R0;
 [--SP] = R1;
+[--SP] = R2;
+
 // 1: Determine the source of interrupt
 // Obtain the currently active interrupt
 R0 = [REG_SEC0_CSID0];
@@ -81,11 +89,6 @@ R0 = [REG_SEC0_CSID0];
 R1 = 0x1F(Z);
 // If it is then jump to RX data section
 CC = R0 == R1; if CC jump RX_Data;
-
-// Check if the interrupt is from SCTL29 = HALFSPORT A DMA = TX channel
-R1 = 0x1D(Z);
-// If it is then jump to RX data section
-CC = R0 == R1; if CC jump TX_Data;
 // Otherwise its from uart
 jump UART_Tx_Data;
 
@@ -103,27 +106,28 @@ R0=[REG_SPORT0_RXPRI_B];
 R3 = [LRxSync];
 BITTGL(R3, 0);
 [LRxSync] = R3;
-CC = BITTST(R3, 0); if CC jump MACIQ;
+CC = BITTST(R3, 0);
+if !CC jump MACIQ;
 jump End_ISR;
 
 MACIQ:
-I0 -= 0x04;
 R1 = [I0 ++ M1]; // R1 contains the in phase value and moves I0 to out of phase point in LUT
-R2 = [I0 ++ M2]; // R2 Contains the out of phase value and moves I0 back to original
+R2 = [I0 ++ M2]; // R2 Contains the out of phase value and moves I0 to next value in LUT.
 // Calculate INPHASE component
 P2 = IQ;
 R5 = [P2++];
 R4 = [P2];
 A1 = R5 (X), A0 = R4 (Z);
-R5:4 = (A1:0 += R6 * R1) (IS);
+R5:4 = (A1:0 += R0 * R1) (IS);
 [P2--] = R4;
 [P2] = R5;
 // Calculate the quadrature component
+NOP;
 P2 = IQ + 0x08;
 R5 = [P2++];
 R4 = [P2];
 A1 = R5 (X), A0 = R4 (Z);
-R5:4 = (A1:0 += R6 * R2) (IS);
+R5:4 = (A1:0 += R0 * R2) (IS);
 [P2--] = R4;
 [P2] = R5;
 
@@ -132,50 +136,36 @@ P0 = B0;
 P1 = I0;
 CC = P0 == P1; if !CC jump End_ISR; // Check whether to reset or not.
 
-P0 = IQ;
+R0 = [IQ]; // R0 = I.H 32 bits, need to transfer bits 3-18 .
+R0 = R0 >>> 3;
+R1 = [IQ+0x08]; //R1 = Q.H 32 bits, need just lower 16
+R1 = R1 >>> 3;
 P1 = IQFinal;
 
-// First 2 values in IQ Final contain lower 16 bits of I.H
-R0 = [P0++]; // R0 = I.H
-R1=R0>>>8; // lower 8 bits of R1 are the higher 8 bits of the low half of R0. (bits 8-15)
-[P1++] = R1;
-[P1++] = R0; // Lower 8 bits of R0 are next to be transferred.
+R2=R0>>>8; // lower 8 bits of R2 are the higher 8 bits of the low half of R0. (bits 8-15)
+[P1++] = R2;
+[P1++] = R0; // Lower 8 bits of R0 are the lower 8 bits of the lower half of R0.
 
 // Next 2 values in IQ Final contain lower 16 bits of Q.H
-R0 = [P0++];
-R1=R0>>>8;
-[P1++] = R1;
-[P1] = R0;
+R2=R1>>>8;
+[P1++] = R2;
+[P1] = R1;
+NOP; NOP;
 
+P0 = IQ;
 R0 = 0x0 (z);
 A1 = A0 = 0;
-[P0--] = R0;
-[P0--] = R0;
-[P0--] = R0;
+[P0++] = R0;
+NOP; NOP;
+[P0++] = R0;
+NOP; NOP;
+[P0++] = R0;
+NOP; NOP;
 [P0] = R0;
 
-//R0=0x2(Z); [REG_UART0_IMSK_SET]=R0;
+R0=0x2(Z); [REG_UART0_IMSK_SET]=R0;
 
 jump End_ISR;
-
-TX_Data:
-[REG_SEC0_CSID0] = R0; // Assert interrupt
-
-// Refills the TX Buffer with next value in LUT.
-R3 = [LTxSync];
-BITTGL(R3, 0);
-[LTxSync] = R3;
-CC = BITTST(R3, 0); if CC jump write_left_Tx;
-
-R3=0x0;
-[REG_SPORT0_TXPRI_A] = R3;
-jump End_ISR;
-
-write_left_Tx:
-R3 = [I0 ++ M0];
-[REG_SPORT0_TXPRI_A] = R3;
-jump End_ISR;
-
 
 UART_Tx_Data:
 // Assert interrupt
@@ -192,9 +182,10 @@ jump End_ISR;
 
 End_ISR:
 // Interrupt end by writing CSID to SEC END register.
-R2 = [REG_SEC0_CSID0];
-[REG_SEC0_END] = R2;
+R0 = [REG_SEC0_CSID0];
+[REG_SEC0_END] = R0;
 
+R2 = [SP++];
 R1 = [SP++];
 R0 = [SP++];
 RETI = [SP++];
@@ -215,7 +206,7 @@ R1=0x03(X); R0=0x40fa(X); call TWI_write;
 
 // R15 Controls the serial port for transfers! enable master mode,
 // frame begins on rising edge, left channel first (Right justified mode)
-R1=0x09(X); R0=0x4015(X); call TWI_write;
+R1=0x01(X); R0=0x4015(X); call TWI_write;
 
 // R19 ADC Control, enable both ADC, leave everything else default
 R1=0x13(X); R0=0x4019(X); call TWI_write;
@@ -286,11 +277,12 @@ codec_configure.end:
 
 sport_configure:
 
-R0=0x3FC(X); [REG_PORTC_FER_SET]=R0;      // Set up Port C in peripheral mode
+R0=0x3F0(X); [REG_PORTC_FER_SET]=R0;      // Set up Port C in peripheral mode
 
 // Look at the data sheets for why im doing the following steps in the particular order
 // To setup interrupts properly
 // 1 clear 2 key register CTL,MCTL
+R0=0x0(Z);
 [REG_SPORT0_CTL_A]=R0; [REG_SPORT0_MCTL_A]=R0;
 [REG_SPORT0_CTL_B]=R0; [REG_SPORT0_MCTL_B]=R0;
 
@@ -303,8 +295,19 @@ R0=0x00400001; [REG_SPORT0_DIV_B]=R0;      // 64 bits per frame (stereo), clock 
 R0=0x80000; [REG_SPORT0_MCTL_B]=R0;
 R0=0x80000; [REG_SPORT0_MCTL_A]=R0;
 // Do not enable the CTLs just yet for synchronization purposes.
-R0=0x001e3973; [REG_SPORT0_CTL_B]=R0;
-R0=0x021e3973; [REG_SPORT0_CTL_A]=R0;
+R0=0x000e3973; [REG_SPORT0_CTL_B]=R0;
+R0=0x020e3973; [REG_SPORT0_CTL_A]=R0;
+
+// Configure DMA
+P0=LUT;
+[REG_DMA0_ADDRSTART]=P0;
+// LUT size is 16 words (left and right channel interleaved)
+R0=0x10; [REG_DMA0_XCNT]=R0;
+// XMOD is 0x04 as data is aligned on 4 byte boundaries 0x0, 0x04, 0x08 etc each address has 1 byte of data so
+// a 32 bit word takes up space from say 0x0->0x04 in memory (0x0 first byte, 0x01 2nd byte, 0x02 3rd byte, 0x03 4th byte)
+R0=0x04; [REG_DMA0_XMOD]=R0;
+// Memory size (MSIZE) is 4 bytes (32 bits) as in the LUT array spacing is .BYTE4
+R0=0x00001221; [REG_DMA0_CFG]=R0;
 
 RTS;
 sport_configure.end:
@@ -353,8 +356,8 @@ R0=0x300(Z); [REG_PORTB_FER_SET]=R0;
 // See the BF706 Processor datasheet to see which multiplexer values enable which function/peripheral
 // UART_TX/RX are function 0
 R0=0x0(Z); [REG_PORTB_MUX]=R0;
-// Set divisor to 10 so that bitrate is 100x10^6 (cclk0) / 16 / 10 = 625000.
-R0=0xA(Z); [REG_UART0_CLK]=R0;
+// Set divisor to 10 so that bitrate is 100x10^6 (cclk0) / 16 / 8 = 781250.
+R0=0x8(Z); [REG_UART0_CLK]=R0;
 // Disable RTS/CTS, enable UART, odd parity, 1 stop bit.
 R0=0x00000301(Z); [REG_UART0_CTL]=R0;
 // Enable TX Interrupt when buffer empty
